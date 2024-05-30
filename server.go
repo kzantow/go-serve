@@ -28,7 +28,7 @@ func NewHandler(path string) Handler {
 
 type endpoint struct {
 	Path    string
-	Params  []string
+	Args    []string
 	Handler func(w http.ResponseWriter, r *http.Request) error
 }
 
@@ -82,8 +82,8 @@ func (s *server) addEndpoint(path string, fn reflect.Value) {
 		Path: path,
 	}
 	for p := 0; p < typ.NumIn(); p++ {
-		in := typ.In(p)
-		e.Params = append(e.Params, in.Name())
+		in := baseType(typ.In(p))
+		e.Args = append(e.Args, in.Name())
 	}
 	e.Handler = s.makeHandlerFunc(fn)
 	s.Endpoints[path] = e
@@ -117,21 +117,28 @@ func (s *server) makeHandlerFunc(fn reflect.Value) func(w http.ResponseWriter, r
 	return func(w http.ResponseWriter, r *http.Request) error {
 		var in []reflect.Value
 		if typ.NumIn() > 0 {
-			var decoded map[string]any
-			PanicOnErr(json.NewDecoder(r.Body).Decode(&decoded))
-			args, ok := decoded["Args"].([]any)
-			if !ok {
-				return fmt.Errorf("unable to get args; got: %#v", decoded)
-			}
-			if len(args) != typ.NumIn() {
-				return fmt.Errorf("wrong number of args, expected: %v", typ.NumIn())
-			}
+			sliceVal := reflect.MakeSlice(anySliceType, typ.NumIn(), typ.NumIn())
+			// set concrete instances in the slice of the types we want to deserialize to
 			for i := 0; i < typ.NumIn(); i++ {
 				argT := typ.In(i)
-				inst := reflect.New(argT).Interface()
-				j, _ := json.Marshal(args[i])
-				PanicOnErr(json.Unmarshal(j, inst))
-				in = append(in, reflect.ValueOf(inst).Elem())
+				inst := reflect.New(argT)
+				sliceVal.Index(i).Set(inst)
+			}
+			slice := sliceVal.Interface()
+			o := payload{
+				Args: slice.([]any),
+			}
+
+			// decode into the payload with pre-populated slice placeholders
+			PanicOnErr(json.NewDecoder(r.Body).Decode(&o))
+
+			for i := 0; i < typ.NumIn(); i++ {
+				sliceItem := sliceVal.Index(i).Elem() // sliceVal.Index() returns an item of the slice; first .Elem() gets the pointer from New earlier
+				if !sliceItem.IsValid() {
+					sliceItem = reflect.New(typ.In(i)) // add an empty item
+				}
+				sliceItem = sliceItem.Elem()
+				in = append(in, sliceItem)
 			}
 		}
 		out := fn.Call(in)
@@ -181,3 +188,9 @@ func baseType(typ reflect.Type) reflect.Type {
 	}
 	return typ
 }
+
+type payload struct {
+	Args []any
+}
+
+var anySliceType = reflect.TypeOf([]any{})

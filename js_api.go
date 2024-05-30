@@ -37,7 +37,7 @@ func (n *endpointNode) WriteJS(s *server, indent string, write func(...string)) 
 		write(prefixLines(renderTemplate(jsFuncTemplate, map[string]any{
 			"Path":   s.ApiPath + n.Endpoint.Path,
 			"JSFunc": s.JSFunc,
-			"Params": n.Endpoint.Params,
+			"Args":   n.Endpoint.Args,
 		}), indent))
 	} else {
 		if n.Parent != nil {
@@ -128,4 +128,4 @@ async function {{ .JSFunc }}(path, args) {
 }`)))
 
 var jsFuncTemplate = GetOrPanic(template.New("jsFunc").Parse(strings.TrimSpace(`
-async function({{ block "args" .Params }}{{- range $j, $p := . }}{{ if $j }},{{ end }}v{{ $j }}_{{ $p }}{{ end }}{{ end }}){return await {{ .JSFunc }}('{{ .Path }}',[{{template "args" .Params }}])}`)))
+async function({{ block "args" .Args }}{{- range $j, $p := . }}{{ if $j }},{{ end }}v{{ $j }}_{{ $p }}{{ end }}{{ end }}){return await {{ .JSFunc }}('{{ .Path }}',[{{template "args" .Args }}])}`)))
