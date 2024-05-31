@@ -20,6 +20,7 @@ func NewHandler(path string) Handler {
 	srv := &server{
 		ApiPath:   path,
 		JSPath:    ".js",
+		TSdPath:   ".d.ts",
 		JSFunc:    "goServePost",
 		Endpoints: map[string]*endpoint{},
 	}
@@ -28,13 +29,15 @@ func NewHandler(path string) Handler {
 
 type endpoint struct {
 	Path    string
-	Args    []string
+	Args    []reflect.Type
+	Returns []reflect.Type
 	Handler func(w http.ResponseWriter, r *http.Request) error
 }
 
 type server struct {
 	ApiPath   string
 	JSPath    string
+	TSdPath   string
 	JSFunc    string
 	Endpoints map[string]*endpoint
 }
@@ -47,6 +50,12 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Content-Type", "application/javascript")
 		w.WriteHeader(http.StatusOK)
 		s.generateJS(w)
+	case s.TSdPath:
+		w.Header().Add("Accept", "*/*")
+		//w.Header().Add("Content-Type", "application/typescript")
+		w.Header().Add("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		s.generateTSd(w)
 	default:
 		e := s.Endpoints[path]
 		if e == nil {
@@ -82,11 +91,22 @@ func (s *server) addEndpoint(path string, fn reflect.Value) {
 		Path: path,
 	}
 	for p := 0; p < typ.NumIn(); p++ {
-		in := baseType(typ.In(p))
-		e.Args = append(e.Args, in.Name())
+		e.Args = append(e.Args, typ.In(p))
 	}
+	e.Returns = returnTypes(typ)
 	e.Handler = s.makeHandlerFunc(fn)
 	s.Endpoints[path] = e
+}
+
+func returnTypes(typ reflect.Type) []reflect.Type {
+	var out []reflect.Type
+	for i := 0; i < typ.NumOut(); i++ {
+		t := typ.Out(i)
+		if !IsErrorType(t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func (s *server) EndpointList() []*endpoint {
@@ -94,26 +114,38 @@ func (s *server) EndpointList() []*endpoint {
 }
 
 func (s *server) generateJS(w io.Writer) {
-	root := endpointNode{}
-	for k, v := range s.Endpoints {
-		parts := regexp.MustCompile("[./]").Split(k, -1)
-		root.getNode(parts).Endpoint = v
-	}
-	root.WriteJS(s, "", func(strings ...string) {
+	WriteJS(s.tree(), s, "", func(strings ...string) {
 		for _, str := range strings {
 			_ = GetOrPanic(w.Write([]byte(str)))
 		}
 	})
 }
 
+func (s *server) generateTSd(w io.Writer) {
+	WriteTSd(s.tree(), s, "", func(strings ...string) {
+		for _, str := range strings {
+			_ = GetOrPanic(w.Write([]byte(str)))
+		}
+	})
+}
+
+func (s *server) tree() *endpointNode {
+	root := &endpointNode{}
+	for k, v := range s.Endpoints {
+		parts := regexp.MustCompile("[./]").Split(k, -1)
+		root.getNode(parts).Endpoint = v
+	}
+	return root
+}
+
 func (s *server) makeHandlerFunc(fn reflect.Value) func(w http.ResponseWriter, r *http.Request) error {
 	typ := fn.Type()
-	if typ.NumOut() == 0 || IsErrorType(typ.Out(0)) || typ.NumOut() > 2 {
-		panic(fmt.Errorf("must have exactly one non-error return value: %#v", fn))
-	}
-	if typ.NumOut() == 2 && !IsErrorType(typ.Out(1)) {
-		panic(fmt.Errorf("second arg must be error type: %#v", fn))
-	}
+	//if typ.NumOut() == 0 || IsErrorType(typ.Out(0)) || typ.NumOut() > 2 {
+	//	panic(fmt.Errorf("must have exactly one non-error return value: %#v", fn))
+	//}
+	//if typ.NumOut() == 2 && !IsErrorType(typ.Out(1)) {
+	//	panic(fmt.Errorf("second arg must be error type: %#v", fn))
+	//}
 	return func(w http.ResponseWriter, r *http.Request) error {
 		var in []reflect.Value
 		if typ.NumIn() > 0 {
@@ -194,3 +226,33 @@ type payload struct {
 }
 
 var anySliceType = reflect.TypeOf([]any{})
+
+type endpointNode struct {
+	Key      string
+	Parent   *endpointNode
+	Endpoint *endpoint
+	SubKeys  map[string]*endpointNode
+}
+
+func (n *endpointNode) Children() []*endpointNode {
+	return SortedMapValues(n.SubKeys)
+}
+
+func (n *endpointNode) getNode(parts []string) *endpointNode {
+	if len(parts) == 0 {
+		return n
+	}
+	part := parts[0]
+	if n.SubKeys == nil {
+		n.SubKeys = map[string]*endpointNode{}
+	}
+	node := n.SubKeys[part]
+	if node == nil {
+		node = &endpointNode{
+			Key:    part,
+			Parent: n,
+		}
+		n.SubKeys[part] = node
+	}
+	return node.getNode(parts[1:])
+}

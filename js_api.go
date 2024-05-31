@@ -4,18 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"reflect"
 	"regexp"
 	"strings"
 )
 
-type endpointNode struct {
-	Key      string
-	Parent   *endpointNode
-	Endpoint *endpoint
-	SubKeys  map[string]*endpointNode
-}
-
-func (n *endpointNode) WriteJS(s *server, indent string, write func(...string)) {
+func WriteJS(n *endpointNode, s *server, indent string, write func(...string)) {
 	if n.Parent == nil {
 		write(renderTemplate(preamble, map[string]any{
 			"ApiPath": s.ApiPath,
@@ -37,7 +31,7 @@ func (n *endpointNode) WriteJS(s *server, indent string, write func(...string)) 
 		write(prefixLines(renderTemplate(jsFuncTemplate, map[string]any{
 			"Path":   s.ApiPath + n.Endpoint.Path,
 			"JSFunc": s.JSFunc,
-			"Args":   n.Endpoint.Args,
+			"Args":   Map(n.Endpoint.Args, varName),
 		}), indent))
 	} else {
 		if n.Parent != nil {
@@ -53,7 +47,7 @@ func (n *endpointNode) WriteJS(s *server, indent string, write func(...string)) 
 				write(",")
 			}
 			write("\n")
-			child.WriteJS(s, nextIndent, write)
+			WriteJS(child, s, nextIndent, write)
 		}
 
 		if n.Parent != nil {
@@ -62,27 +56,14 @@ func (n *endpointNode) WriteJS(s *server, indent string, write func(...string)) 
 	}
 }
 
-func (n *endpointNode) Children() []*endpointNode {
-	return SortedMapValues(n.SubKeys)
-}
-
-func (n *endpointNode) getNode(parts []string) *endpointNode {
-	if len(parts) == 0 {
-		return n
+func varName(t reflect.Type) string {
+	t = baseType(t)
+	suffix := ""
+	for t.Kind() == reflect.Slice {
+		suffix += "_arr"
+		t = t.Elem()
 	}
-	part := parts[0]
-	if n.SubKeys == nil {
-		n.SubKeys = map[string]*endpointNode{}
-	}
-	node := n.SubKeys[part]
-	if node == nil {
-		node = &endpointNode{
-			Key:    part,
-			Parent: n,
-		}
-		n.SubKeys[part] = node
-	}
-	return node.getNode(parts[1:])
+	return t.Name() + suffix
 }
 
 func validateIdentifier(identifier string) {
@@ -128,4 +109,4 @@ async function {{ .JSFunc }}(path, args) {
 }`)))
 
 var jsFuncTemplate = GetOrPanic(template.New("jsFunc").Parse(strings.TrimSpace(`
-async function({{ block "args" .Args }}{{- range $j, $p := . }}{{ if $j }},{{ end }}v{{ $j }}_{{ $p }}{{ end }}{{ end }}){return await {{ .JSFunc }}('{{ .Path }}',[{{template "args" .Args }}])}`)))
+async function({{ block "args" .Args }}{{- range $j, $p := . }}{{ if $j }}, {{ end }}v{{ $j }}_{{ $p }}{{ end }}{{ end }}){return await {{ .JSFunc }}('{{ .Path }}', [{{template "args" .Args }}])}`)))
