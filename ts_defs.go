@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
+	"text/template"
 )
 
 func WriteTSd(n *endpointNode, s *server, indent string, write func(...string)) {
 	if n.Parent == nil {
+		write(renderTemplate(tsPreamble, nil), "\n")
 		// output all custom return types
 		var output []reflect.Type
 		for _, e := range s.EndpointList() {
@@ -112,6 +115,10 @@ func baseElemType(t reflect.Type) reflect.Type {
 }
 
 func tsType(t reflect.Type) string {
+	switch t {
+	case byteSlice:
+		return "base64" // this gets automatically base64 encoded as a string
+	}
 	suffix := ""
 	for t.Kind() == reflect.Slice {
 		suffix += "[]"
@@ -121,7 +128,18 @@ func tsType(t reflect.Type) string {
 	switch t.Kind() {
 	case reflect.String:
 		name = "string"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64, reflect.Float32, reflect.Float64:
+	case reflect.Int,
+		reflect.Int8,
+		reflect.Int16,
+		reflect.Int32,
+		reflect.Int64,
+		reflect.Uint,
+		reflect.Uint8,
+		reflect.Uint16,
+		reflect.Uint32,
+		reflect.Uint64,
+		reflect.Float32,
+		reflect.Float64:
 		name = "number"
 	default:
 	}
@@ -130,3 +148,9 @@ func tsType(t reflect.Type) string {
 	}
 	return name + suffix
 }
+
+var byteSlice = reflect.TypeOf([]byte{})
+
+var tsPreamble = GetOrPanic(template.New("tsPreamble").Parse(strings.TrimSpace(`
+type base64 = string
+`)))

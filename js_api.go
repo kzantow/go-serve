@@ -3,15 +3,15 @@ package serve
 import (
 	"bytes"
 	"fmt"
-	"html/template"
 	"reflect"
 	"regexp"
 	"strings"
+	"text/template"
 )
 
 func WriteJS(n *endpointNode, s *server, indent string, write func(...string)) {
 	if n.Parent == nil {
-		write(renderTemplate(preamble, map[string]any{
+		write(renderTemplate(jsPreamble, map[string]any{
 			"ApiPath": s.ApiPath,
 			"JSFunc":  s.JSFunc,
 		}))
@@ -82,7 +82,7 @@ func renderTemplate(tpl *template.Template, context any) string {
 	return buf.String()
 }
 
-var preamble = GetOrPanic(template.New("preamble").Parse(strings.TrimSpace(`
+var jsPreamble = GetOrPanic(template.New("jsPreamble").Parse(strings.TrimSpace(`
 async function {{ .JSFunc }}(path, args) {
   try {
     console.debug('fetching:', path, args)
