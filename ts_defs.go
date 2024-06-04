@@ -8,7 +8,7 @@ import (
 	"text/template"
 )
 
-func WriteTSd(n *endpointNode, s *server, indent string, write func(...string)) {
+func WriteTypeScriptDefinitions(n *endpointNode, s *server, indent string, write func(...string)) {
 	if n.Parent == nil {
 		write(renderTemplate(tsPreamble, nil), "\n")
 		// output all custom return types
@@ -66,7 +66,7 @@ func WriteTSd(n *endpointNode, s *server, indent string, write func(...string)) 
 				write(",")
 			}
 			write("\n")
-			WriteTSd(child, s, nextIndent, write)
+			WriteTypeScriptDefinitions(child, s, nextIndent, write)
 		}
 
 		if n.Parent != nil {

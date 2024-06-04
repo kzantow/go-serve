@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"runtime/debug"
+	"strings"
 )
 
 type Handler interface {
@@ -18,11 +20,11 @@ type Handler interface {
 // NewHandler takes objects and exposes each method as a simple POST-based API handler as well as generating javascript
 func NewHandler(path string) Handler {
 	srv := &server{
-		ApiPath:   path,
-		JSPath:    ".js",
-		TSdPath:   ".d.ts",
-		JSFunc:    "goServePost",
-		Endpoints: map[string]*endpoint{},
+		ApiPath:    path,
+		JSPath:     ".js",
+		TSDefsPath: ".d.ts",
+		JSFunc:     "goServePost",
+		Endpoints:  map[string]*endpoint{},
 	}
 	return srv
 }
@@ -35,11 +37,11 @@ type endpoint struct {
 }
 
 type server struct {
-	ApiPath   string
-	JSPath    string
-	TSdPath   string
-	JSFunc    string
-	Endpoints map[string]*endpoint
+	ApiPath    string
+	JSPath     string
+	TSDefsPath string
+	JSFunc     string
+	Endpoints  map[string]*endpoint
 }
 
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +52,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Content-Type", "application/javascript")
 		w.WriteHeader(http.StatusOK)
 		s.generateJS(w)
-	case s.TSdPath:
+	case s.TSDefsPath:
 		w.Header().Add("Accept", "*/*")
 		//w.Header().Add("Content-Type", "application/typescript")
 		w.Header().Add("Content-Type", "text/plain")
@@ -122,7 +124,7 @@ func (s *server) generateJS(w io.Writer) {
 }
 
 func (s *server) generateTSd(w io.Writer) {
-	WriteTSd(s.tree(), s, "", func(strings ...string) {
+	WriteTypeScriptDefinitions(s.tree(), s, "", func(strings ...string) {
 		for _, str := range strings {
 			_ = GetOrPanic(w.Write([]byte(str)))
 		}
@@ -140,12 +142,6 @@ func (s *server) tree() *endpointNode {
 
 func (s *server) makeHandlerFunc(fn reflect.Value) func(w http.ResponseWriter, r *http.Request) error {
 	typ := fn.Type()
-	//if typ.NumOut() == 0 || IsErrorType(typ.Out(0)) || typ.NumOut() > 2 {
-	//	panic(fmt.Errorf("must have exactly one non-error return value: %#v", fn))
-	//}
-	//if typ.NumOut() == 2 && !IsErrorType(typ.Out(1)) {
-	//	panic(fmt.Errorf("second arg must be error type: %#v", fn))
-	//}
 	return func(w http.ResponseWriter, r *http.Request) error {
 		var in []reflect.Value
 		if typ.NumIn() > 0 {
@@ -174,7 +170,11 @@ func (s *server) makeHandlerFunc(fn reflect.Value) func(w http.ResponseWriter, r
 			}
 		}
 		out := fn.Call(in)
-		PanicOnErr(extractError(out))
+		err := extractError(out)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("%v", err), http.StatusInternalServerError)
+			return nil
+		}
 		w.Header().Add("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		val := extractValue(out)
@@ -185,11 +185,25 @@ func (s *server) makeHandlerFunc(fn reflect.Value) func(w http.ResponseWriter, r
 func (s *server) invoke(e *endpoint, w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if e := recover(); e != nil {
-			fmt.Println(e)
+			stack := string(debug.Stack())
+			lines := strings.Split(stack, "\n")
+			panicLine := lineIndex(lines, "panic.go", 0)
+			lines = lines[panicLine+1:]
+			stack = strings.Join(lines, "\n")
+			fmt.Println(e, stack)
 			http.Error(w, fmt.Sprintf("%v", e), http.StatusInternalServerError)
 		}
 	}()
 	PanicOnErr(e.Handler(w, r))
+}
+
+func lineIndex(lines []string, substr string, startAt int) int {
+	for i := startAt; i < len(lines); i++ {
+		if strings.Contains(lines[i], substr) {
+			return i
+		}
+	}
+	return -1
 }
 
 func extractError(out []reflect.Value) error {
